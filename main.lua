@@ -1,0 +1,2202 @@
+if getgenv().PerformanceFarmerCleanup then
+    pcall(getgenv().PerformanceFarmerCleanup)
+end
+
+if getgenv().AutoBaby == nil then getgenv().AutoBaby = true end
+if getgenv().AutoCompleteTasks == nil then getgenv().AutoCompleteTasks = true end
+if getgenv().AutoSwapFullGrown == nil then getgenv().AutoSwapFullGrown = false end
+if getgenv().SelectedPetKind == nil then getgenv().SelectedPetKind = "cat" end
+if getgenv().WebhookEnabled == nil then getgenv().WebhookEnabled = false end
+if getgenv().WebhookURL == nil then getgenv().WebhookURL = "" end
+if getgenv().WebhookInterval == nil then getgenv().WebhookInterval = 5 end
+if getgenv().WebhookOnTask == nil then getgenv().WebhookOnTask = false end
+if getgenv().Disable3DRendering == nil then getgenv().Disable3DRendering = true end
+
+local function elevate()
+    if setthreadidentity then
+        setthreadidentity(8)
+    elseif setidentity then
+        setidentity(8)
+    end
+end
+
+elevate()
+
+local function rename(remotename, hashedremote)
+    pcall(function()
+        if typeof(hashedremote) == "Instance" then
+            hashedremote.Name = remotename
+        end
+    end)
+end
+
+local getup = getupvalue or (debug and debug.getupvalue)
+local getups = getupvalues or (debug and debug.getupvalues)
+local AC_MODULE = game:GetService("ReplicatedStorage").ClientModules.Core.RouterClient.RouterClient
+local initFunction = require(AC_MODULE).init
+local upvalueTable = nil
+
+if getup then
+    pcall(function()
+        upvalueTable = getup(initFunction, 7)
+    end)
+end
+
+if type(upvalueTable) ~= "table" and getups then
+    pcall(function()
+        for _, u in ipairs(getups(initFunction)) do
+            if type(u) == "table" and (u["TeamAPI/ChooseTeam"] ~= nil or u["HousingAPI/ActivateFurniture"] ~= nil) then
+                upvalueTable = u
+                break
+            end
+        end
+    end)
+end
+
+if type(upvalueTable) == "table" then
+    for k, v in pairs(upvalueTable) do
+        rename(k, v)
+    end
+else
+    print("patch rip")
+end
+
+if getgenv().AdoptMeHubCleanup then
+    pcall(getgenv().AdoptMeHubCleanup)
+end
+
+if getgenv().AdoptMeHub then
+    pcall(function()
+        if getgenv().AdoptMeHub.Root and getgenv().AdoptMeHub.Root.Parent then
+            getgenv().AdoptMeHub.Root.Parent:Destroy()
+        end
+        getgenv().AdoptMeHub:Destroy()
+    end)
+end
+
+local hubActive = true
+getgenv().AdoptMeHubCleanup = function()
+    hubActive = false
+    pcall(function()
+        if getgenv().AdoptMeHub and getgenv().AdoptMeHub.Root and getgenv().AdoptMeHub.Root.Parent then
+            getgenv().AdoptMeHub.Root.Parent:Destroy()
+        end
+    end)
+end
+
+if hookmetamethod and not getgenv().AdoptMeCameraHooked then
+    pcall(function()
+        local oldNewIndex
+        oldNewIndex = hookmetamethod(game, "__newindex", function(t, k, v)
+            if tostring(k) == "CameraMinZoomDistance" and tonumber(v) and tonumber(v) >= 5 then
+                return oldNewIndex(t, k, 0.5)
+            end
+            return oldNewIndex(t, k, v)
+        end)
+        getgenv().AdoptMeCameraHooked = true
+    end)
+end
+
+
+
+local currentActivity = "Monitoring Needs"
+local updateStatsUI
+local function setActivity(act)
+    currentActivity = act or "Monitoring Needs"
+    if updateStatsUI then
+        pcall(updateStatsUI)
+    end
+end
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LP = Players.LocalPlayer
+local lp = LP
+
+pcall(function()
+    for _, v in pairs(getconnections(lp.Idled)) do
+        v:Disable()
+    end
+end)
+
+local Fsys = require(ReplicatedStorage:WaitForChild("Fsys"))
+local RouterClient = Fsys.load("RouterClient")
+local ClientData = Fsys.load("ClientData")
+local InteriorsM = Fsys.load("InteriorsM")
+local EquippedPets = Fsys.load("EquippedPets")
+local PetActions = Fsys.load("PetActions")
+local CameraUtil = Fsys.load("CameraUtil")
+
+pcall(function()
+    setthreadidentity(2)
+    local UIManager = Fsys.load("UIManager")
+    local fpa = UIManager and UIManager.apps and UIManager.apps.FocusPetApp
+    if fpa then
+        local mod = game:GetService("ReplicatedStorage").ClientModules.Core.UIManager.Apps.FocusPetApp.FocusPetApp
+        local orig = require(mod)
+        fpa.capture_focus = orig.capture_focus
+        fpa.release_focus = orig.release_focus
+        if fpa.camera then
+            fpa.camera.capture_focus = function() return end
+            fpa.camera.update = function() return end
+        end
+        if fpa.instance then
+            fpa.instance.Enabled = false
+        end
+    end
+    setthreadidentity(8)
+end)
+
+local CFG = {
+    AutoBaby = true,
+    AutoCompleteTasks = true,
+    AutoSwapFullGrown = false,
+    SelectedPetKind = "cat",
+    AutoDoQuests = false,
+    AutoClaimQuests = false,
+    AutoClaimTabBonus = false,
+    AutoClaimDailyLogin = false,
+    WebhookEnabled = false,
+    WebhookURL = "",
+    WebhookInterval = 5,
+    WebhookOnTask = false
+}
+
+local lastWebhookSendTime = 0
+
+local taskDisplayNames = {
+    sleepy = "Sleepy (Needs Bed or Crib)",
+    hungry = "Hungry (Needs Food)",
+    thirsty = "Thirsty (Needs Water/Drink)",
+    dirty = "Dirty (Needs Bath/Shower)",
+    toilet = "Toilet (Needs Toilet / Potty)",
+    bored = "Bored (Go to Playground)",
+    school = "School (Go to School)",
+    salon = "Salon (Go to Salon)",
+    pizza_party = "Pizza Party (Go to Pizza Shop)",
+    camping = "Camping (Go to Campsite)",
+    beach_party = "Beach Party (Go to Beach)",
+    pool_party = "Pool Party (Go to Pool)",
+    sick = "Sick (Healing Apple)",
+    pet_me = "Pet Me (Interact with Pet)",
+    mystery = "Choose (Mystery Need)",
+    ride = "Ride (Ride Pet)",
+    walk = "Walk (Walk Pet)",
+    play = "Play (Throw Toy for Pet)",
+    party_zone = "Party (Admin Abuse Event)"
+}
+
+local outdoorLocations = {
+    bored = CFrame.new(-401.63, 31, -1760.05),
+    beach_party = CFrame.new(-670.98, 35.5, -1413.08),
+    camping = CFrame.new(-18.44, 35.5, -1046.0),
+    pool_party = CFrame.new(-670.98, 35.5, -1413.08)
+}
+
+local interiorLocations = {
+    school = { dest = "School", door = "MainDoor" },
+    salon = { dest = "Salon", door = "MainDoor" },
+    pizza_party = { dest = "PizzaShop", door = "MainDoor" }
+}
+
+local function notify(data)
+    elevate()
+end
+
+local function resetCameraZoom(targetDist)
+    pcall(function()
+        LP.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Zoom
+        LP.CameraMinZoomDistance = 0.5
+        LP.CameraMaxZoomDistance = 128
+        local cam = workspace.CurrentCamera
+        local char = LP.Character
+        local hum = char and char:FindFirstChild("Humanoid")
+        if cam and hum and cam.CameraSubject ~= hum then
+            cam.CameraSubject = hum
+        end
+        local desiredDist = targetDist or 25
+        if CameraUtil and CameraUtil.set_zoom_distance then
+            CameraUtil.set_zoom_distance(desiredDist)
+        end
+    end)
+end
+
+pcall(function()
+    if CameraUtil and CameraUtil.set_zoom_distance then
+        local originalSetZoom = CameraUtil.set_zoom_distance
+        CameraUtil.set_zoom_distance = function(dist, ...)
+            if tonumber(dist) and tonumber(dist) < 15 then
+                dist = 22
+            end
+            return originalSetZoom(dist, ...)
+        end
+    end
+end)
+
+pcall(function()
+    LP:GetPropertyChangedSignal("CameraMinZoomDistance"):Connect(function()
+        if LP.CameraMinZoomDistance > 1 then
+            LP.CameraMinZoomDistance = 0.5
+        end
+    end)
+    LP:GetPropertyChangedSignal("CameraMaxZoomDistance"):Connect(function()
+        if LP.CameraMaxZoomDistance < 15 then
+            LP.CameraMaxZoomDistance = 128
+        end
+    end)
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        pcall(function()
+            LP.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Zoom
+            if LP.CameraMaxZoomDistance < 15 then
+                LP.CameraMaxZoomDistance = 128
+            end
+            if LP.CameraMinZoomDistance > 1 then
+                LP.CameraMinZoomDistance = 0.5
+            end
+            local cam = workspace.CurrentCamera
+            if cam then
+                local char = LP.Character
+                local hum = char and char:FindFirstChild("Humanoid")
+                if hum and cam.CameraSubject and cam.CameraSubject ~= hum then
+                    local isSeat = cam.CameraSubject:IsA("Seat") or cam.CameraSubject:IsA("VehicleSeat")
+                    if not isSeat then
+                        cam.CameraSubject = hum
+                    end
+                end
+                local currentDist = (cam.CFrame.Position - cam.Focus.Position).Magnitude
+                if currentDist < 8 then
+                    if CameraUtil and CameraUtil.set_zoom_distance then
+                        CameraUtil.set_zoom_distance(22)
+                    end
+                end
+            end
+        end)
+    end
+end)
+
+local function formatTaskName(raw)
+    return taskDisplayNames[raw] or (raw:sub(1, 1):upper() .. raw:sub(2):gsub("_", " "))
+end
+
+local function getCurrentTeam()
+    local team = ClientData.get("team")
+    if team then return team end
+    return (LP.Team and LP.Team.Name) or "None"
+end
+
+local function switchToRole(roleName)
+    elevate()
+    local s, err = pcall(function()
+        RouterClient.get("TeamAPI/ChooseTeam"):InvokeServer(roleName, {
+            dont_respawn = true,
+            source_for_logging = "avatar_editor"
+        })
+    end)
+    return s, err
+end
+
+local function ensureBaby()
+    elevate()
+    if getCurrentTeam() ~= "Babies" then
+        setActivity("Becoming Baby")
+        switchToRole("Babies")
+        notify({
+            Title = "Role Updated",
+            Content = "Transformed into a Baby!",
+            Duration = 2.5
+        })
+    end
+end
+
+local function getEquippedPetWrapper()
+    local myPets = EquippedPets.get_my_equipped()
+    local pet = myPets and myPets[1]
+    if pet then
+        return EquippedPets.get_wrapper_from_item(pet)
+    end
+    return nil
+end
+
+local function getActivePetModel()
+    local wrapper = getEquippedPetWrapper()
+    if wrapper and wrapper.char then
+        return wrapper.char
+    end
+    local petsFolder = workspace:FindFirstChild("Pets")
+    if petsFolder then
+        local first = petsFolder:FindFirstChildOfClass("Model")
+        if first then return first end
+    end
+    return nil
+end
+
+local function getPetDisplayName(kind)
+    local name = nil
+    pcall(function()
+        setthreadidentity(2)
+        local InventoryDB = Fsys.load("InventoryDB")
+        if InventoryDB and InventoryDB.pets and InventoryDB.pets[kind] then
+            name = InventoryDB.pets[kind].name
+        end
+        setthreadidentity(8)
+    end)
+    if not name or name == "" then
+        name = kind:gsub("_", " "):gsub("(%a)([%w_']*)", function(first, rest)
+            return first:upper() .. rest:lower()
+        end)
+    end
+    return name
+end
+
+local function getOwnedPetKinds()
+    local kinds = {}
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local pets = myData.inventory and myData.inventory.pets or {}
+    for _, info in pairs(pets) do
+        local k = info.kind
+        if k and not table.find(kinds, k) then
+            table.insert(kinds, k)
+        end
+    end
+    table.sort(kinds, function(a, b)
+        return getPetDisplayName(a):lower() < getPetDisplayName(b):lower()
+    end)
+    return kinds
+end
+
+local petKindByDisplayName = {}
+local function getPetDropdownValues()
+    local values = { "Current / Equipped", "Any Pet (Auto Swap)" }
+    petKindByDisplayName = {
+        ["Current / Equipped"] = "current",
+        ["Any Pet (Auto Swap)"] = "any"
+    }
+
+    local kinds = getOwnedPetKinds()
+    for _, kind in ipairs(kinds) do
+        local disp = getPetDisplayName(kind)
+        if not table.find(values, disp) then
+            table.insert(values, disp)
+            petKindByDisplayName[disp] = kind
+        else
+            local dispWithKind = disp .. " (" .. kind .. ")"
+            table.insert(values, dispWithKind)
+            petKindByDisplayName[dispWithKind] = kind
+        end
+    end
+
+    return values
+end
+
+local function findPetToEquip(targetKindFilter, requireNotFullGrown)
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local pets = myData.inventory and myData.inventory.pets or {}
+
+    local myEquipped = nil
+    pcall(function()
+        setthreadidentity(2)
+        myEquipped = EquippedPets.get_my_equipped()
+        setthreadidentity(8)
+    end)
+    local currentUnique = myEquipped and myEquipped[1] and myEquipped[1].unique
+
+    if targetKindFilter and targetKindFilter ~= "" and targetKindFilter ~= "any" and targetKindFilter ~= "current" then
+        for unique, info in pairs(pets) do
+            if unique ~= currentUnique and info.kind == targetKindFilter then
+                return unique, info
+            end
+        end
+    end
+
+    if requireNotFullGrown then
+        for unique, info in pairs(pets) do
+            if unique ~= currentUnique then
+                local age = (info.properties and info.properties.age) or 1
+                if age < 6 then
+                    return unique, info
+                end
+            end
+        end
+    end
+
+    return nil, nil
+end
+
+local function swapToPet(unique, petInfo)
+    elevate()
+    local s = pcall(function()
+        RouterClient.get("ToolAPI/Equip"):InvokeServer(unique, {})
+    end)
+    if s then
+        task.wait(0.5)
+        local name = (petInfo and petInfo.properties and petInfo.properties.name) or (petInfo and petInfo.kind and getPetDisplayName(petInfo.kind)) or "Pet"
+        local age = (petInfo and petInfo.properties and petInfo.properties.age) or 1
+        local ageStages = { "Newborn", "Junior", "Pre-Teen", "Teen", "Post-Teen", "Full Grown" }
+        local ageName = ageStages[age] or ("Age " .. tostring(age))
+        notify({
+            Title = "Pet Equipped",
+            Content = "Now leveling: " .. name .. " (" .. ageName .. ")",
+            Duration = 3
+        })
+        pcall(updateDashboardDisplay)
+        return true
+    end
+    return false
+end
+
+local lastAutoSwapCheck = 0
+local function checkAndAutoSwapPet()
+    if not CFG.AutoSwapFullGrown and (CFG.SelectedPetKind == "current" or not CFG.SelectedPetKind) then
+        return
+    end
+
+    if tick() - lastAutoSwapCheck < 4 then return end
+    lastAutoSwapCheck = tick()
+
+    elevate()
+    local myPets = nil
+    pcall(function()
+        setthreadidentity(2)
+        myPets = EquippedPets.get_my_equipped()
+        setthreadidentity(8)
+    end)
+
+    local currentPet = myPets and myPets[1]
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local pets = myData.inventory and myData.inventory.pets or {}
+
+    local targetKind = CFG.SelectedPetKind
+    local targetKindActual = (targetKind ~= "current" and targetKind ~= "any") and targetKind or nil
+
+    if not currentPet then
+        local u, info = findPetToEquip(targetKindActual, CFG.AutoSwapFullGrown)
+        if u and info then
+            swapToPet(u, info)
+        end
+        return
+    end
+
+    local currentInfo = pets[currentPet.unique] or currentPet
+    local currentAge = (currentInfo.properties and currentInfo.properties.age) or 1
+    local currentKind = currentInfo.kind
+
+    local isFullGrown = (currentAge >= 6)
+    local wrongKind = targetKindActual and (currentKind ~= targetKindActual)
+
+    if (CFG.AutoSwapFullGrown and isFullGrown) or wrongKind then
+        local u, info = findPetToEquip(targetKindActual, CFG.AutoSwapFullGrown)
+        if u and info then
+            swapToPet(u, info)
+        elseif CFG.AutoSwapFullGrown and isFullGrown and targetKindActual then
+            local fallbackU, fallbackInfo = findPetToEquip(nil, true)
+            if fallbackU and fallbackInfo then
+                swapToPet(fallbackU, fallbackInfo)
+            end
+        end
+    end
+end
+
+local function ensureFarmPlatform()
+    local platform = workspace:FindFirstChild("AdoptMeFarmPlatform")
+    local defaultBasePos = Vector3.new(-5986, 3920, -9014)
+
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and hrp.Position.Y > 3000 then
+        defaultBasePos = Vector3.new(hrp.Position.X, 3920, hrp.Position.Z)
+    end
+
+    if not platform then
+        platform = Instance.new("Part")
+        platform.Name = "AdoptMeFarmPlatform"
+        platform.Size = Vector3.new(120, 2, 120)
+        platform.Position = defaultBasePos
+        platform.Anchored = true
+        platform.CanCollide = true
+        platform.Material = Enum.Material.SmoothPlastic
+        platform.BrickColor = BrickColor.new("Medium stone grey")
+        platform.Parent = workspace
+    else
+        if platform.Position.Y > 3950 then
+            platform.Position = Vector3.new(platform.Position.X, 3920, platform.Position.Z)
+        end
+    end
+    return platform
+end
+
+local function teleportToPlatform()
+    elevate()
+    local platform = ensureFarmPlatform()
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and platform then
+        hrp.CFrame = CFrame.new(platform.Position + Vector3.new(0, 4, 0))
+    end
+end
+
+local function ensureInsideHouse()
+    elevate()
+    local curLoc = InteriorsM.get_current_location()
+    if not (curLoc and curLoc.destination_id == "housing") then
+        pcall(function()
+            setthreadidentity(2)
+            InteriorsM.enter("housing", "MainDoor", { house_owner = LP })
+            elevate()
+        end)
+        local t0 = tick()
+        repeat
+            task.wait(0.5)
+            curLoc = InteriorsM.get_current_location()
+        until (curLoc and curLoc.destination_id == "housing") or (tick() - t0 > 8)
+    end
+    if curLoc and curLoc.destination_id == "housing" then
+        task.wait(0.4)
+        teleportToPlatform()
+    end
+    return curLoc and curLoc.destination_id == "housing"
+end
+
+pcall(function()
+    InteriorsM.on_location_changed:Connect(function(loc)
+        resetCameraZoom()
+        if loc and loc.destination_id == "housing" then
+            task.wait(0.6)
+            teleportToPlatform()
+            resetCameraZoom()
+        end
+    end)
+end)
+
+local function enterBuilding(destName, doorName)
+    elevate()
+    local s, err = pcall(function()
+        setthreadidentity(2)
+        InteriorsM.enter(destName, doorName or "MainDoor")
+        elevate()
+    end)
+    return s, err
+end
+
+local function findCampBed()
+    local sm = workspace:FindFirstChild("StaticMap")
+    local camp = sm and sm:FindFirstChild("Campsite")
+    if camp then
+        for _, desc in ipairs(camp:GetDescendants()) do
+            if desc:IsA("Model") and (desc.Name:lower():find("bed") or desc.Name:lower():find("cot") or desc.Name:lower():find("tent") or desc.Name:lower():find("sleepingbag") or desc.Name:lower():find("sleep")) then
+                local ub = desc:FindFirstChild("UseBlocks")
+                if ub and #ub:GetChildren() > 0 then
+                    return desc, ub:GetChildren()[1]
+                end
+                local seat = desc:FindFirstChildWhichIsA("Seat")
+                if seat then
+                    return desc, seat
+                end
+            end
+        end
+        for _, desc in ipairs(camp:GetDescendants()) do
+            if desc:IsA("Seat") then
+                return desc.Parent, desc
+            end
+        end
+    end
+    return nil, nil
+end
+
+local function teleportToOutdoor(targetCFrame, taskName)
+    elevate()
+    pcall(function()
+        setthreadidentity(2)
+        InteriorsM.enter("MainMap", "NeighborhoodDoor")
+        task.wait(1.5)
+        elevate()
+        local char = LP.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local dest = targetCFrame
+            local sm = workspace:FindFirstChild("StaticMap")
+            if sm then
+                if taskName == "bored" or dest == outdoorLocations.bored then
+                    local park = sm:FindFirstChild("Park")
+                    local target = park and (park:FindFirstChild("BoredAilmentTarget") or park:FindFirstChild("AilmentTarget"))
+                    if target then
+                        dest = target.CFrame + Vector3.new(0, 3, 0)
+                    end
+                elseif taskName == "camping" or dest == outdoorLocations.camping then
+                    local camp = sm:FindFirstChild("Campsite")
+                    local origin = camp and camp:FindFirstChild("CampsiteOrigin")
+                    if origin then
+                        dest = origin.CFrame + Vector3.new(0, 2.5, 0)
+                    end
+                elseif taskName == "beach_party" or taskName == "pool_party" or dest == outdoorLocations.beach_party or dest == outdoorLocations.pool_party then
+                    local beach = sm:FindFirstChild("Beach")
+                    local target = beach and (beach:FindFirstChild("BeachPartyAilmentTarget") or beach:FindFirstChild("BeachPartyNavTarget"))
+                    if target then
+                        dest = target.CFrame + Vector3.new(0, 3, 0)
+                    end
+                end
+            end
+            hrp.CFrame = dest
+
+            if taskName == "camping" or dest == outdoorLocations.camping then
+                task.spawn(function()
+                    task.wait(1)
+                    local campModel, campPart = findCampBed()
+                    if campPart and campModel then
+                        local wrapper = getEquippedPetWrapper()
+                        local petChar = wrapper and (wrapper.char or wrapper.character)
+                        if not petChar then petChar = getActivePetModel() end
+                        if petChar then
+                            pcall(function()
+                                RouterClient.get("HousingAPI/ActivateFurniture"):InvokeServer(
+                                    LP,
+                                    campModel:GetAttribute("furniture_unique") or campModel.Name,
+                                    campPart.Name,
+                                    { cframe = campPart.CFrame },
+                                    petChar
+                                )
+                            end)
+                        end
+                        local currentChar = LP.Character
+                        local hum = currentChar and currentChar:FindFirstChild("Humanoid")
+                        if hum and campPart:IsA("Seat") then
+                            pcall(function() campPart:Sit(hum) end)
+                        elseif currentChar then
+                            pcall(function()
+                                RouterClient.get("HousingAPI/ActivateFurniture"):InvokeServer(
+                                    LP,
+                                    campModel:GetAttribute("furniture_unique") or campModel.Name,
+                                    campPart.Name,
+                                    { cframe = campPart.CFrame },
+                                    currentChar
+                                )
+                            end)
+                        end
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+local activeFurnitureInUse = {}
+
+local function isFurnitureExcluded(unique, exclude)
+    if not exclude then return false end
+    if type(exclude) == "string" then return unique == exclude end
+    if type(exclude) == "table" then return exclude[unique] ~= nil end
+    if type(exclude) == "function" then return exclude(unique) end
+    return false
+end
+
+local function findHouseFurniture(filterFn, excludeUnique)
+    local house = workspace:FindFirstChild("HouseInteriors")
+    local furn = house and house:FindFirstChild("furniture")
+    if furn then
+        for _, folder in ipairs(furn:GetChildren()) do
+            for _, item in ipairs(folder:GetChildren()) do
+                if filterFn(item.Name:lower()) then
+                    local ub = item:FindFirstChild("UseBlocks")
+                    if ub and #ub:GetChildren() > 0 then
+                        local unique = item:GetAttribute("furniture_unique") or folder.Name:match("([^/]+)$")
+                        if not isFurnitureExcluded(unique, excludeUnique) and not activeFurnitureInUse[unique] then
+                            return unique, ub:GetChildren()[1], item
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil, nil, nil
+end
+
+local function buyFreeFurniture(kindName)
+    elevate()
+    pcall(function()
+        RouterClient.get("HousingAPI/BuyFurnitures"):InvokeServer({
+            { kind = kindName, properties = { cframe = CFrame.new(0, 5, 0) } }
+        })
+    end)
+    task.wait(1)
+end
+
+local function getBabyAilmentKeys()
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local am = myData.ailments_manager or {}
+    local ba = am.baby_ailments or {}
+    local keys = {}
+    for k, v in pairs(ba) do
+        local key = nil
+        if type(v) == "table" and v.kind then
+            key = v.kind
+        elseif type(v) == "table" and v.ailment_key then
+            key = v.ailment_key
+        elseif type(k) == "string" and not tonumber(k) then
+            key = k
+        elseif type(v) == "string" then
+            key = v
+        end
+        if key then
+            local normKey = tostring(key):match("^([^:]+)") or tostring(key)
+            if not table.find(keys, normKey) then table.insert(keys, normKey) end
+        end
+    end
+    return keys
+end
+
+local function getPetAilmentKeys()
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local am = myData.ailments_manager or {}
+    local petAilments = am.ailments or {}
+    local keys = {}
+    for _, ailments in pairs(petAilments) do
+        for needKey, needData in pairs(ailments) do
+            local key = (type(needData) == "table" and (needData.kind or needData.ailment_key)) or needKey
+            local keyStr = tostring(key)
+            local normKey = keyStr:match("^([^:]+)") or keyStr
+            if not table.find(keys, normKey) then
+                table.insert(keys, normKey)
+            end
+        end
+    end
+    return keys
+end
+
+local function isAilmentActive(taskKey, forBaby)
+    if forBaby then
+        local bKeys = getBabyAilmentKeys()
+        return table.find(bKeys, taskKey) ~= nil
+    else
+        local pKeys = getPetAilmentKeys()
+        return table.find(pKeys, taskKey) ~= nil
+    end
+end
+
+local function unseatBaby()
+    pcall(function()
+        local char = LP.Character
+        local hum = char and char:FindFirstChild("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        pcall(function()
+            RouterClient.get("AdoptAPI/ExitSeatStates"):FireServer()
+            RouterClient.get("AdoptAPI/MakeBabyJumpOutOfSeat"):FireServer(char)
+            RouterClient.get("HousingAPI/AnimatedFurnitureExit"):FireServer()
+            RouterClient.get("PetAPI/ExitFurnitureUseStates"):FireServer(char)
+        end)
+        if char then
+            for _, child in ipairs(char:GetDescendants()) do
+                if child:IsA("Weld") and child.Name:lower():find("seat") then
+                    child:Destroy()
+                end
+            end
+        end
+        if hum then
+            hum.Sit = false
+            hum.Jump = true
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+        if hrp then
+            hrp.AssemblyLinearVelocity = Vector3.new(0, 35, 0)
+        end
+    end)
+end
+
+local function completeSleep(forBaby, excludeUnique)
+    elevate()
+    ensureInsideHouse()
+    local unique, blockPart, model = findHouseFurniture(function(name)
+        if forBaby then
+            return (name:find("crib") or name:find("bed")) and not name:find("pet")
+        else
+            return name:find("crib") or name:find("bed")
+        end
+    end, excludeUnique)
+    if not unique then
+        buyFreeFurniture("basiccrib")
+        unique, blockPart, model = findHouseFurniture(function(name)
+            return name:find("crib") or name:find("bed")
+        end, excludeUnique)
+    end
+    if unique and blockPart then
+        activeFurnitureInUse[unique] = forBaby and "Baby" or "Pet"
+        local targetChar = forBaby and LP.Character or getActivePetModel()
+        task.spawn(function()
+            pcall(function()
+                RouterClient.get("HousingAPI/ActivateFurniture"):InvokeServer(
+                    LP,
+                    unique,
+                    blockPart.Name,
+                    { cframe = blockPart.CFrame },
+                    targetChar
+                )
+            end)
+        end)
+        return unique
+    end
+    return nil
+end
+
+local function completeShower(forBaby, excludeUnique)
+    elevate()
+    ensureInsideHouse()
+    local unique, blockPart, model = findHouseFurniture(function(name)
+        if forBaby then
+            return (name:find("shower") or name:find("bath") or name:find("tub")) and not name:find("pet")
+        else
+            return name:find("shower") or name:find("bath") or name:find("tub")
+        end
+    end, excludeUnique)
+    if not unique then
+        buyFreeFurniture("cheap_pet_bathtub")
+        unique, blockPart, model = findHouseFurniture(function(name)
+            return name:find("shower") or name:find("bath") or name:find("tub")
+        end, excludeUnique)
+    end
+    if unique and blockPart then
+        activeFurnitureInUse[unique] = forBaby and "Baby" or "Pet"
+        local targetChar = forBaby and LP.Character or getActivePetModel()
+        task.spawn(function()
+            pcall(function()
+                RouterClient.get("HousingAPI/ActivateFurniture"):InvokeServer(
+                    LP,
+                    unique,
+                    blockPart.Name,
+                    { cframe = blockPart.CFrame },
+                    targetChar
+                )
+            end)
+        end)
+        return unique
+    end
+    return nil
+end
+
+local function completeToilet(forBaby, excludeUnique)
+    elevate()
+    ensureInsideHouse()
+    local unique, blockPart, model = findHouseFurniture(function(name)
+        return name:find("toilet") or name:find("potty")
+    end, excludeUnique)
+    if not unique then
+        buyFreeFurniture("toilet")
+        unique, blockPart, model = findHouseFurniture(function(name)
+            return name:find("toilet") or name:find("potty")
+        end, excludeUnique)
+    end
+    if unique and blockPart then
+        activeFurnitureInUse[unique] = forBaby and "Baby" or "Pet"
+        local targetChar = forBaby and LP.Character or getActivePetModel()
+        task.spawn(function()
+            pcall(function()
+                RouterClient.get("HousingAPI/ActivateFurniture"):InvokeServer(
+                    LP,
+                    unique,
+                    blockPart.Name,
+                    { cframe = blockPart.CFrame },
+                    targetChar
+                )
+            end)
+        end)
+        return unique
+    end
+    return nil
+end
+
+local function getOrBuyFreeFood(itemKind, excludeUnique)
+    elevate()
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local foodInv = myData.inventory and myData.inventory.food or {}
+    for _, item in pairs(foodInv) do
+        if (item.kind == itemKind or item.id == itemKind) and (not excludeUnique or item.unique ~= excludeUnique) and (not item.properties or not item.properties.uses_left or item.properties.uses_left > 0) then
+            return item
+        end
+    end
+    RouterClient.get("ShopAPI/BuyItem"):InvokeServer("food", itemKind, {})
+    task.wait(0.4)
+    myData = ClientData.get_data()[LP.Name] or {}
+    for _, item in pairs(myData.inventory and myData.inventory.food or {}) do
+        if (item.kind == itemKind or item.id == itemKind) and (not excludeUnique or item.unique ~= excludeUnique) and (not item.properties or not item.properties.uses_left or item.properties.uses_left > 0) then
+            return item
+        end
+    end
+    return nil
+end
+
+local function completeHungry(forBaby)
+    elevate()
+    if forBaby then
+        local t0 = tick()
+        while isAilmentActive("hungry", true) and tick() - t0 < 25 do
+            local foodItem = getOrBuyFreeFood("schospital_refresh_2023_cafeteria_sandwich")
+            if not foodItem then break end
+            pcall(function()
+                RouterClient.get("ToolAPI/Equip"):InvokeServer(foodItem.unique, {})
+                task.wait(0.4)
+                for i = 1, (foodItem.uses or 3) do
+                    if not isAilmentActive("hungry", true) then break end
+                    RouterClient.get("ToolAPI/ServerUseTool"):InvokeServer(foodItem.unique, "START")
+                    task.wait(0.3)
+                    RouterClient.get("ToolAPI/ServerUseTool"):InvokeServer(foodItem.unique, "END")
+                    task.wait(1.5)
+                end
+                RouterClient.get("ToolAPI/Unequip"):InvokeServer(foodItem.unique, {})
+            end)
+            task.wait(0.5)
+        end
+    else
+        local foodItem = getOrBuyFreeFood("schospital_refresh_2023_cafeteria_sandwich")
+        if foodItem then
+            local wrapper = getEquippedPetWrapper()
+            if wrapper and PetActions.can_feed_pet(wrapper) then
+                PetActions.feed_pet(wrapper, { item = foodItem })
+            end
+        end
+        local t0 = tick()
+        while tick() - t0 < 15 do
+            task.wait(1)
+            if not isAilmentActive("hungry", false) then
+                break
+            end
+        end
+    end
+    if forBaby then
+        return not isAilmentActive("hungry", true)
+    else
+        return not isAilmentActive("hungry", false)
+    end
+end
+
+local function completeThirsty(forBaby)
+    elevate()
+    if forBaby then
+        local t0 = tick()
+        while isAilmentActive("thirsty", true) and tick() - t0 < 25 do
+            local drinkItem = getOrBuyFreeFood("water_paper_cup")
+            if not drinkItem then break end
+            pcall(function()
+                RouterClient.get("ToolAPI/Equip"):InvokeServer(drinkItem.unique, {})
+                task.wait(0.4)
+                for i = 1, (drinkItem.uses or 3) do
+                    if not isAilmentActive("thirsty", true) then break end
+                    RouterClient.get("ToolAPI/ServerUseTool"):InvokeServer(drinkItem.unique, "START")
+                    task.wait(0.3)
+                    RouterClient.get("ToolAPI/ServerUseTool"):InvokeServer(drinkItem.unique, "END")
+                    task.wait(1.5)
+                end
+                RouterClient.get("ToolAPI/Unequip"):InvokeServer(drinkItem.unique, {})
+            end)
+            task.wait(0.5)
+        end
+    else
+        local drinkItem = getOrBuyFreeFood("water_paper_cup")
+        if drinkItem then
+            local wrapper = getEquippedPetWrapper()
+            if wrapper and PetActions.can_feed_pet(wrapper) then
+                PetActions.feed_pet(wrapper, { item = drinkItem })
+            end
+        end
+        local t0 = tick()
+        while tick() - t0 < 15 do
+            task.wait(1)
+            if not isAilmentActive("thirsty", false) then
+                break
+            end
+        end
+    end
+    if forBaby then
+        return not isAilmentActive("thirsty", true)
+    else
+        return not isAilmentActive("thirsty", false)
+    end
+end
+
+local function completeSick(forBaby, excludeUnique)
+    elevate()
+    if forBaby then
+        local t0 = tick()
+        while isAilmentActive("sick", true) and tick() - t0 < 20 do
+            local appleItem = getOrBuyFreeFood("healing_apple", excludeUnique)
+            if not appleItem then break end
+            pcall(function()
+                RouterClient.get("ToolAPI/Equip"):InvokeServer(appleItem.unique, {})
+                task.wait(0.4)
+                RouterClient.get("ToolAPI/ServerUseTool"):InvokeServer(appleItem.unique, "START")
+                task.wait(0.3)
+                RouterClient.get("ToolAPI/ServerUseTool"):InvokeServer(appleItem.unique, "END")
+                task.wait(1)
+                RouterClient.get("ToolAPI/Unequip"):InvokeServer(appleItem.unique, {})
+            end)
+            task.wait(0.5)
+        end
+    else
+        local appleItem = getOrBuyFreeFood("healing_apple", excludeUnique)
+        if appleItem then
+            local wrapper = getEquippedPetWrapper()
+            if wrapper and PetActions.can_feed_pet(wrapper) then
+                PetActions.feed_pet(wrapper, { item = appleItem })
+            end
+        end
+        local t0 = tick()
+        while tick() - t0 < 15 do
+            task.wait(1)
+            if not isAilmentActive("sick", false) then
+                break
+            end
+        end
+    end
+    if forBaby then
+        return not isAilmentActive("sick", true)
+    else
+        return not isAilmentActive("sick", false)
+    end
+end
+
+local function completeRide()
+    setActivity("Pet: Riding")
+    elevate()
+    ensureInsideHouse()
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local strollers = myData.inventory and myData.inventory.strollers or {}
+    local strollerItem = nil
+    for _, s in pairs(strollers) do
+        strollerItem = s
+        break
+    end
+    if not strollerItem then return false end
+
+    local wrapper = getEquippedPetWrapper()
+    local petChar = wrapper and wrapper.char
+    if not petChar then return false end
+
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+
+    local platform = ensureFarmPlatform()
+    local platformPos = platform.Position
+
+    teleportToPlatform()
+    task.wait(0.3)
+
+    pcall(function()
+        RouterClient.get("ToolAPI/Equip"):InvokeServer(strollerItem.unique, {})
+    end)
+    task.wait(0.4)
+
+    local tool = nil
+    for _, c in ipairs(char:GetChildren()) do
+        if c:IsA("Tool") or c.Name:lower():find("stroller") then
+            tool = c
+            break
+        end
+    end
+    local touchPart = tool and tool:FindFirstChild("ModelHandle") and tool.ModelHandle:FindFirstChild("TouchToSits") and tool.ModelHandle.TouchToSits:GetChildren()[1]
+    if touchPart then
+        pcall(function()
+            RouterClient.get("AdoptAPI/UseStroller"):InvokeServer(LP, petChar, touchPart)
+        end)
+    end
+
+    local center = platformPos + Vector3.new(0, 4, 0)
+    local radius = 15
+    local angle = 0
+    local t0 = tick()
+    while isAilmentActive("ride", false) and tick() - t0 < 35 do
+        angle = angle + 0.35
+        local target = center + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+        hum:MoveTo(target)
+        task.wait(0.15)
+    end
+
+    pcall(function()
+        RouterClient.get("AdoptAPI/UnequipStroller"):FireServer()
+        RouterClient.get("ToolAPI/Unequip"):InvokeServer(strollerItem.unique, {})
+    end)
+
+    teleportToPlatform()
+    return not isAilmentActive("ride", false)
+end
+
+local function completeWalk()
+    setActivity("Pet: Walking")
+    elevate()
+    ensureInsideHouse()
+
+    local wrapper = getEquippedPetWrapper()
+    local petChar = wrapper and wrapper.char
+    if not petChar then
+        petChar = getActivePetModel()
+    end
+    if not petChar then return false end
+
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChild("Humanoid")
+    if not hrp or not hum then return false end
+
+    local platform = ensureFarmPlatform()
+    local platformPos = platform.Position
+
+    teleportToPlatform()
+    task.wait(0.3)
+
+    local center = platformPos + Vector3.new(0, 4, 0)
+    local radius = 15
+    local angle = 0
+    local t0 = tick()
+    while isAilmentActive("walk", false) and tick() - t0 < 45 do
+        angle = angle + 0.35
+        local target = center + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+        hum:MoveTo(target)
+        task.wait(0.15)
+    end
+
+    teleportToPlatform()
+    return not isAilmentActive("walk", false)
+end
+
+local function completePetMe()
+    setActivity("Pet: Petting (Headless)")
+    elevate()
+    local wrapper = getEquippedPetWrapper()
+    local petUnique = wrapper and (wrapper.pet_unique or (wrapper.item and wrapper.item.unique))
+    if not petUnique then return false end
+
+    pcall(function()
+        setthreadidentity(2)
+        local UIManager = Fsys.load("UIManager")
+        local fpa = UIManager and UIManager.apps and UIManager.apps.FocusPetApp
+        local ph = fpa and fpa.petting_handler
+
+        if fpa and ph then
+            local mod = game:GetService("ReplicatedStorage").ClientModules.Core.UIManager.Apps.FocusPetApp.FocusPetApp
+            local origClass = require(mod)
+            fpa.capture_focus = origClass.capture_focus
+            fpa.release_focus = origClass.release_focus
+
+            if fpa.camera then
+                fpa.camera.capture_focus = function() return end
+                fpa.camera.update = function() return end
+            end
+
+            local oldSetAppVis = UIManager.set_app_visibility
+            UIManager.set_app_visibility = function(appName, vis)
+                if appName == fpa.ClassName then return end
+                return oldSetAppVis(appName, vis)
+            end
+
+            local oldShowEx = ph.show_example
+            ph.show_example = function() return end
+
+            local toggle = false
+            local oldGetPos = ph.get_position
+            ph.get_position = function(self)
+                toggle = not toggle
+                local center = workspace.CurrentCamera.ViewportSize * 0.5
+                return center + Vector2.new(toggle and 20 or -20, 0)
+            end
+
+            local oldUpdateHand = ph.update_hand
+            ph.update_hand = function(self, update_fn)
+                local Promise = Fsys.load("package:Promise")
+                return Promise.new(function(resolve, reject, onCancel)
+                    while not onCancel() do
+                        update_fn()
+                        if ph.instance then ph.instance.Visible = false end
+                        if ph.example then ph.example.Visible = false end
+                        task.wait(0.03)
+                    end
+                end)
+            end
+
+            fpa:capture_focus(wrapper)
+            if fpa.instance then fpa.instance.Enabled = false end
+
+            task.wait(0.2)
+            ph.is_holding_pet_button = true
+            ph:start_petting("pet_me", true)
+
+            local t0 = tick()
+            while isAilmentActive("pet_me", false) and tick() - t0 < 6 do
+                if ph.instance then ph.instance.Visible = false end
+                if fpa.instance then fpa.instance.Enabled = false end
+                task.wait(0.1)
+            end
+
+            fpa:release_focus()
+
+            UIManager.set_app_visibility = oldSetAppVis
+            ph.show_example = oldShowEx
+            ph.get_position = oldGetPos
+            ph.update_hand = oldUpdateHand
+        else
+            local t0 = tick()
+            while isAilmentActive("pet_me", false) and tick() - t0 < 10 do
+                RouterClient.get("PetAPI/PetPetted"):FireServer(petUnique, LP)
+                RouterClient.get("AilmentsAPI/ProgressPetMeAilment"):FireServer(petUnique)
+                task.wait(0.5)
+            end
+        end
+        setthreadidentity(8)
+    end)
+
+    resetCameraZoom()
+    return not isAilmentActive("pet_me", false)
+end
+
+local function getThrowableToy()
+    elevate()
+    local toys = nil
+    pcall(function()
+        setthreadidentity(2)
+        local inv = ClientData.get and ClientData.get("inventory")
+        if inv and inv.toys then
+            toys = inv.toys
+        end
+        if not toys and ClientData.get_data then
+            local allData = ClientData.get_data()
+            local myD = allData and allData[LP.Name]
+            toys = myD and myD.inventory and myD.inventory.toys
+        end
+        setthreadidentity(8)
+    end)
+
+    if toys then
+        for _, item in pairs(toys) do
+            local id = tostring(item.kind or item.id or ""):lower()
+            if id:find("bone") or id:find("ball") or id:find("disc") or id:find("stick") or id:find("chew") then
+                return item
+            end
+        end
+        for _, item in pairs(toys) do
+            return item
+        end
+    end
+
+    pcall(function()
+        local shopRemote = RouterClient.get("ShopAPI/BuyItem")
+        if shopRemote then
+            shopRemote:InvokeServer("toys", "squeaky_bone_default", {})
+        end
+    end)
+    task.wait(0.4)
+
+    pcall(function()
+        setthreadidentity(2)
+        local inv = ClientData.get and ClientData.get("inventory")
+        if inv and inv.toys then
+            toys = inv.toys
+        end
+        if not toys and ClientData.get_data then
+            local allData = ClientData.get_data()
+            local myD = allData and allData[LP.Name]
+            toys = myD and myD.inventory and myD.inventory.toys
+        end
+        setthreadidentity(8)
+    end)
+
+    if toys then
+        for _, item in pairs(toys) do
+            return item
+        end
+    end
+    return nil
+end
+
+local function completePlay()
+    setActivity("Pet: Playing")
+    elevate()
+    local toy = getThrowableToy()
+    if not toy then return false end
+
+    local char = LP.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+
+    pcall(function()
+        local equipRemote = RouterClient.get("ToolAPI/Equip")
+        if equipRemote then
+            equipRemote:InvokeServer(toy.unique, {})
+        end
+    end)
+    task.wait(0.5)
+
+    local creatorTypes = nil
+    pcall(function()
+        setthreadidentity(2)
+        creatorTypes = Fsys.load("AdoptMeEnums/PetEntities/PetObjectCreatorType")
+        setthreadidentity(8)
+    end)
+    local droppableType = (creatorTypes and creatorTypes.DroppableToy) or "__Enum_PetObjectCreatorType_1"
+
+    local t0 = tick()
+    while isAilmentActive("play", false) and tick() - t0 < 25 do
+        char = LP.Character
+        hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local spawnCF = hrp and (hrp.CFrame + hrp.CFrame.LookVector * 8) or CFrame.new()
+
+        pcall(function()
+            local createRemote = RouterClient.get("PetObjectAPI/CreatePetObject")
+            if createRemote then
+                createRemote:InvokeServer(droppableType, {
+                    unique_id = toy.unique,
+                    reaction_name = "ThrowToyReaction",
+                    spawn_cframe = spawnCF
+                })
+            end
+        end)
+        task.wait(3.5)
+    end
+
+    pcall(function()
+        local unequipRemote = RouterClient.get("ToolAPI/Unequip")
+        if unequipRemote then
+            unequipRemote:InvokeServer(toy.unique, {})
+        end
+    end)
+    return not isAilmentActive("play", false)
+end
+
+local function completeMysteryChoice()
+    elevate()
+    local wrapper = getEquippedPetWrapper()
+    local petUnique = wrapper and (wrapper.pet_unique or (wrapper.item and wrapper.item.unique))
+    if not petUnique then return false end
+
+    pcall(function()
+        setthreadidentity(2)
+        local h = require(game:GetService("ReplicatedStorage").new.modules.Ailments.Helpers.MysteryHelper)
+        local myData = ClientData.get_data()[LP.Name] or {}
+        local am = myData.ailments_manager or {}
+        local petAilments = (am.ailments and am.ailments[petUnique]) or {}
+
+        for ailmentId, entry in pairs(petAilments) do
+            local k = type(entry) == "table" and (entry.kind or entry.ailment_key) or tostring(ailmentId)
+            if k == "mystery" or tostring(ailmentId):lower():find("mystery") then
+                local action = h.get_action(entry)
+                local slots = action and action:_get_ailment_slots(wrapper)
+                if not slots or #slots == 0 then
+                    slots = { "bored", "sleepy", "dirty" }
+                end
+                local chosenIdx = math.random(1, #slots)
+                local chosenKind = slots[chosenIdx]
+                local ailmentKey = (entry.components and entry.components.mystery and entry.components.mystery.ailment_key) or "mystery"
+                RouterClient.get("AilmentsAPI/ChooseMysteryAilment"):FireServer(
+                    petUnique,
+                    ailmentKey,
+                    chosenIdx,
+                    chosenKind
+                )
+            end
+        end
+
+        local ba = am.baby_ailments or {}
+        for ailmentId, entry in pairs(ba) do
+            local k = type(entry) == "table" and (entry.kind or entry.ailment_key) or tostring(ailmentId)
+            if k == "mystery" or tostring(ailmentId):lower():find("mystery") then
+                local action = h.get_action(entry)
+                local slots = action and action:_get_ailment_slots(wrapper)
+                if not slots or #slots == 0 then
+                    slots = { "bored", "sleepy", "dirty" }
+                end
+                local chosenIdx = math.random(1, #slots)
+                local chosenKind = slots[chosenIdx]
+                local ailmentKey = (entry.components and entry.components.mystery and entry.components.mystery.ailment_key) or "mystery"
+                RouterClient.get("AilmentsAPI/ChooseMysteryAilment"):FireServer(
+                    "baby",
+                    ailmentKey,
+                    chosenIdx,
+                    chosenKind
+                )
+            end
+        end
+        setthreadidentity(8)
+    end)
+
+    task.wait(0.6)
+    return not isAilmentActive("mystery", false) and not isAilmentActive("mystery", true)
+end
+
+local function completePartyZone()
+    elevate()
+    local s, pz = pcall(function()
+        setthreadidentity(2)
+        local AdminAbuse = require(game:GetService("ReplicatedStorage").new.modules.AdminAbuse)
+        local val = AdminAbuse.get_value("party_zone")
+        setthreadidentity(8)
+        return val
+    end)
+
+    if not s or not pz or not pz.position then
+        return false
+    end
+
+    local dest = pz.destination_id or "MainMap"
+    if tostring(dest):lower():find("pizza") then
+        return false
+    end
+    local rawPos = pz.position
+    local targetPos = Vector3.new(rawPos[1], rawPos[2] + 3, rawPos[3])
+
+    if dest == "MainMap" then
+        pcall(function()
+            setthreadidentity(2)
+            InteriorsM.enter("MainMap", "NeighborhoodDoor")
+            task.wait(1.5)
+            elevate()
+            local char = LP.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                hrp.CFrame = CFrame.new(targetPos)
+            end
+        end)
+    else
+        enterBuilding(dest, "MainDoor")
+        task.wait(1.5)
+        local char = LP.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            hrp.CFrame = CFrame.new(targetPos)
+        end
+    end
+
+    local t0 = tick()
+    while (isAilmentActive("party_zone", false) or isAilmentActive("party_zone", true)) and tick() - t0 < 70 do
+        task.wait(1)
+        local char = LP.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp and (hrp.Position - targetPos).Magnitude > 25 then
+            hrp.CFrame = CFrame.new(targetPos)
+        end
+    end
+
+    return not isAilmentActive("party_zone", false) and not isAilmentActive("party_zone", true)
+end
+
+local sessionStartTime = tick()
+local initialMoney = nil
+local tasksCompletedCount = 0
+local recentCompletedSummary = nil
+
+local isSolvingTasks = false
+
+local function solveCurrentTasks()
+    if isSolvingTasks then return end
+    isSolvingTasks = true
+    local prevCompletedCount = tasksCompletedCount
+    local justCompletedList = {}
+
+    local doBabyTasks = CFG.AutoBaby and (getCurrentTeam() == "Babies")
+    local babyTasks = doBabyTasks and getBabyAilmentKeys() or {}
+    local petTasks = getPetAilmentKeys()
+
+    local petHouseNeeds = { "sleepy", "dirty", "toilet", "hungry", "thirsty", "sick" }
+    local babyHouseNeeds = { "dirty", "sleepy", "toilet", "hungry", "thirsty", "sick" }
+
+    local hasPetHouseNeed = false
+    for _, need in ipairs(petHouseNeeds) do
+        if isAilmentActive(need, false) then
+            hasPetHouseNeed = true
+            break
+        end
+    end
+
+    local hasBabyHouseNeed = false
+    if doBabyTasks then
+        for _, need in ipairs(babyHouseNeeds) do
+            if isAilmentActive(need, true) then
+                hasBabyHouseNeed = true
+                break
+            end
+        end
+    end
+
+    if hasPetHouseNeed or hasBabyHouseNeed then
+        ensureInsideHouse()
+
+        local petDone = not hasPetHouseNeed
+        local babyDone = not hasBabyHouseNeed
+
+        if hasPetHouseNeed then
+            task.spawn(function()
+                for _, need in ipairs(petHouseNeeds) do
+                    if isAilmentActive(need, false) then
+                        if need == "sleepy" then
+                            local furn = completeSleep(false)
+                            local t0 = tick()
+                            while isAilmentActive("sleepy", false) and tick() - t0 < 25 do
+                                task.wait(0.5)
+                            end
+                            if furn then activeFurnitureInUse[furn] = nil end
+                            if not isAilmentActive("sleepy", false) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "🐾 Sleepy")
+                            end
+                        elseif need == "dirty" then
+                            local furn = completeShower(false)
+                            local t0 = tick()
+                            while isAilmentActive("dirty", false) and tick() - t0 < 25 do
+                                task.wait(0.5)
+                            end
+                            if furn then activeFurnitureInUse[furn] = nil end
+                            if not isAilmentActive("dirty", false) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "🐾 Dirty")
+                            end
+                        elseif need == "toilet" then
+                            local furn = completeToilet(false)
+                            local t0 = tick()
+                            while isAilmentActive("toilet", false) and tick() - t0 < 20 do
+                                task.wait(0.5)
+                            end
+                            if furn then activeFurnitureInUse[furn] = nil end
+                            if not isAilmentActive("toilet", false) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "🐾 Toilet")
+                            end
+                        elseif need == "hungry" then
+                            if completeHungry(false) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "🐾 Hungry")
+                            end
+                        elseif need == "thirsty" then
+                            if completeThirsty(false) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "🐾 Thirsty")
+                            end
+                        elseif need == "sick" then
+                            if completeSick(false) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "🐾 Sick")
+                            end
+                        end
+                    end
+                end
+                petDone = true
+            end)
+        end
+
+        if hasBabyHouseNeed then
+            task.spawn(function()
+                for _, need in ipairs(babyHouseNeeds) do
+                    if isAilmentActive(need, true) then
+                        if need == "dirty" then
+                            local furn = completeShower(true)
+                            local t0 = tick()
+                            while isAilmentActive("dirty", true) and tick() - t0 < 25 do
+                                task.wait(0.5)
+                            end
+                            unseatBaby()
+                            task.wait(0.5)
+                            if furn then activeFurnitureInUse[furn] = nil end
+                            if not isAilmentActive("dirty", true) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "👶 Dirty")
+                            end
+                        elseif need == "sleepy" then
+                            local furn = completeSleep(true)
+                            local t0 = tick()
+                            while isAilmentActive("sleepy", true) and tick() - t0 < 25 do
+                                task.wait(0.5)
+                            end
+                            unseatBaby()
+                            task.wait(0.5)
+                            if furn then activeFurnitureInUse[furn] = nil end
+                            if not isAilmentActive("sleepy", true) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "👶 Sleepy")
+                            end
+                        elseif need == "toilet" then
+                            local furn = completeToilet(true)
+                            local t0 = tick()
+                            while isAilmentActive("toilet", true) and tick() - t0 < 20 do
+                                task.wait(0.5)
+                            end
+                            unseatBaby()
+                            task.wait(0.5)
+                            if furn then activeFurnitureInUse[furn] = nil end
+                            if not isAilmentActive("toilet", true) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "👶 Toilet")
+                            end
+                        elseif need == "hungry" then
+                            if completeHungry(true) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "👶 Hungry")
+                            end
+                        elseif need == "thirsty" then
+                            if completeThirsty(true) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "👶 Thirsty")
+                            end
+                        elseif need == "sick" then
+                            if completeSick(true) then
+                                tasksCompletedCount = tasksCompletedCount + 1
+                                table.insert(justCompletedList, "👶 Sick")
+                            end
+                        end
+                    end
+                end
+                babyDone = true
+            end)
+        end
+
+        local waitStart = tick()
+        while (not petDone or not babyDone) and tick() - waitStart < 45 do
+            task.wait(0.5)
+        end
+
+        teleportToPlatform()
+    end
+
+    if table.find(petTasks, "ride") then
+        if completeRide() then
+            tasksCompletedCount = tasksCompletedCount + 1
+            table.insert(justCompletedList, "🐾 Ride")
+        end
+    end
+
+    if table.find(petTasks, "walk") then
+        if completeWalk() then
+            tasksCompletedCount = tasksCompletedCount + 1
+            table.insert(justCompletedList, "🐾 Walk")
+        end
+    end
+
+    if table.find(petTasks, "play") then
+        if completePlay() then
+            tasksCompletedCount = tasksCompletedCount + 1
+            table.insert(justCompletedList, "🐾 Play")
+        end
+    end
+
+    if table.find(petTasks, "pet_me") then
+        if completePetMe() then
+            tasksCompletedCount = tasksCompletedCount + 1
+            table.insert(justCompletedList, "🐾 Pet Me")
+        end
+    end
+
+    if table.find(petTasks, "mystery") or table.find(babyTasks, "mystery") then
+        if completeMysteryChoice() then
+            tasksCompletedCount = tasksCompletedCount + 1
+            table.insert(justCompletedList, "🐾 Choose (Mystery)")
+        end
+    end
+
+    if table.find(petTasks, "party_zone") or table.find(babyTasks, "party_zone") then
+        local bHad = table.find(babyTasks, "party_zone") ~= nil
+        local pHad = table.find(petTasks, "party_zone") ~= nil
+        if completePartyZone() then
+            if bHad and not isAilmentActive("party_zone", true) then
+                tasksCompletedCount = tasksCompletedCount + 1
+                table.insert(justCompletedList, "👶 Party (Admin Event)")
+            end
+            if pHad and not isAilmentActive("party_zone", false) then
+                tasksCompletedCount = tasksCompletedCount + 1
+                table.insert(justCompletedList, "🐾 Party (Admin Event)")
+            end
+        end
+    end
+
+    for taskName, locData in pairs(interiorLocations) do
+        local bHas = table.find(babyTasks, taskName) ~= nil
+        local pHas = table.find(petTasks, taskName) ~= nil
+        if bHas or pHas then
+            enterBuilding(locData.dest, locData.door)
+            local t0 = tick()
+            while tick() - t0 < 70 do
+                task.wait(1)
+                local bRem = bHas and isAilmentActive(taskName, true)
+                local pRem = pHas and isAilmentActive(taskName, false)
+                if not bRem and not pRem then break end
+            end
+            if bHas and not isAilmentActive(taskName, true) then
+                tasksCompletedCount = tasksCompletedCount + 1
+                table.insert(justCompletedList, "👶 " .. formatTaskName(taskName))
+            end
+            if pHas and not isAilmentActive(taskName, false) then
+                tasksCompletedCount = tasksCompletedCount + 1
+                table.insert(justCompletedList, "🐾 " .. formatTaskName(taskName))
+            end
+            break
+        end
+    end
+
+    for taskName, cf in pairs(outdoorLocations) do
+        local bHas = table.find(babyTasks, taskName) ~= nil
+        local pHas = table.find(petTasks, taskName) ~= nil
+        if bHas or pHas then
+            teleportToOutdoor(cf, taskName)
+            local t0 = tick()
+            while tick() - t0 < 70 do
+                task.wait(1)
+                local bRem = bHas and isAilmentActive(taskName, true)
+                local pRem = pHas and isAilmentActive(taskName, false)
+                if not bRem and not pRem then break end
+            end
+            if bHas and not isAilmentActive(taskName, true) then
+                tasksCompletedCount = tasksCompletedCount + 1
+                table.insert(justCompletedList, "👶 " .. formatTaskName(taskName))
+            end
+            if pHas and not isAilmentActive(taskName, false) then
+                tasksCompletedCount = tasksCompletedCount + 1
+                table.insert(justCompletedList, "🐾 " .. formatTaskName(taskName))
+            end
+            break
+        end
+    end
+
+    if #justCompletedList > 0 then
+        recentCompletedSummary = table.concat(justCompletedList, ", ")
+    end
+
+    if CFG.WebhookEnabled and CFG.WebhookOnTask and tasksCompletedCount > prevCompletedCount then
+        task.spawn(function()
+            pcall(function()
+                sendWebhookReport(false)
+            end)
+        end)
+    end
+
+    isSolvingTasks = false
+    setActivity("Monitoring Needs")
+end
+
+local function getEquippedPetInfo()
+    local myPets = nil
+    pcall(function()
+        setthreadidentity(2)
+        myPets = EquippedPets.get_my_equipped()
+        setthreadidentity(8)
+    end)
+    local pet = myPets and myPets[1]
+    if not pet then return "None" end
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local pets = (myData.inventory and myData.inventory.pets) or {}
+    local pInfo = pets[pet.unique] or pet
+    local petName = (pInfo.properties and pInfo.properties.name) or pInfo.kind or "Pet"
+    local petAge = (pInfo.properties and pInfo.properties.age) or 1
+    local ageStages = { "Newborn", "Junior", "Pre-Teen", "Teen", "Post-Teen", "Full Grown" }
+    local ageName = ageStages[petAge] or ("Age " .. tostring(petAge))
+    return petName:gsub("^%l", string.upper) .. " (" .. ageName .. ")"
+end
+
+local function formatMoney(amount)
+    local formatted = tostring(amount or 0)
+    while true do
+        local k
+        formatted, k = string.gsub(formatted, "^(-?%d+)(%d%d%d)", "%1,%2")
+        if k == 0 then break end
+    end
+    return "$" .. formatted
+end
+
+
+local function sendWebhookReport(isTest)
+    elevate()
+    local url = CFG.WebhookURL
+    if not url or url == "" then
+        if isTest then
+            notify({
+                Title = "Webhook Error",
+                Content = "Please enter a valid Discord Webhook URL first!",
+                Duration = 3
+            })
+        end
+        return false
+    end
+
+    local HttpService = game:GetService("HttpService")
+    local fn = (syn and syn.request) or request or http_request
+    if not fn then
+        if isTest then
+            notify({
+                Title = "Webhook Error",
+                Content = "Your executor does not support HTTP requests!",
+                Duration = 3
+            })
+        end
+        return false
+    end
+
+    local elapsed = math.floor(tick() - sessionStartTime)
+    local hours = math.floor(elapsed / 3600)
+    local mins = math.floor((elapsed % 3600) / 60)
+    local secs = elapsed % 60
+    local uptimeStr = string.format("%02dh %02dm %02ds", hours, mins, secs)
+
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local currentMoney = myData.money or 0
+    if initialMoney == nil then
+        initialMoney = currentMoney
+    end
+    local moneyEarned = currentMoney - initialMoney
+    local earnedSign = (moneyEarned >= 0) and ("+" .. formatMoney(moneyEarned)) or ("-" .. formatMoney(math.abs(moneyEarned)))
+    local moneyStr = formatMoney(currentMoney) .. " (" .. earnedSign .. ")"
+
+    local petInfo = getEquippedPetInfo()
+    local teamStr = getCurrentTeam()
+    local roleStr = (teamStr == "Babies" and "👶 Baby") or (teamStr == "Parents" and "🧑 Parent") or teamStr
+
+    local isBaby = (teamStr == "Babies")
+    local petTasks = getPetAilmentKeys()
+    local babyTasks = isBaby and getBabyAilmentKeys() or {}
+
+    local petTaskLines = {}
+    for _, t in ipairs(petTasks) do
+        table.insert(petTaskLines, "• " .. formatTaskName(t))
+    end
+    local petTasksDisplay = (#petTaskLines > 0) and table.concat(petTaskLines, "\n") or "✅ All caught up! (No active pet needs)"
+
+    local babyTasksDisplay
+    if isBaby then
+        local babyTaskLines = {}
+        for _, t in ipairs(babyTasks) do
+            table.insert(babyTaskLines, "• " .. formatTaskName(t))
+        end
+        babyTasksDisplay = (#babyTaskLines > 0) and table.concat(babyTaskLines, "\n") or "✅ All caught up! (No active baby needs)"
+    else
+        babyTasksDisplay = "⚪ Not Active (Playing as Parent)"
+    end
+
+    local justCompletedDisplay = recentCompletedSummary or "None yet (Monitoring)"
+
+    local dailyQuestsDisplay = "Daily Quests: Disabled"
+
+    local currentStatus = "Idle"
+    if isSolvingTasks then
+        currentStatus = "Solving needs..."
+    elseif CFG.AutoCompleteTasks then
+        currentStatus = "Monitoring for needs..."
+    end
+
+    local embedTitle = isTest and "🧪 Adopt Me! Hub — Webhook Test" or "📊 Adopt Me! Hub — Farming Report"
+    local embedColor = isTest and 3447003 or 65440
+
+    local payload = {
+        username = "Adopt Me! Hub",
+        avatar_url = "https://i.imgur.com/8f8e0mC.png",
+        embeds = {
+            {
+                title = embedTitle,
+                color = embedColor,
+                fields = {
+                    { name = "👤 Player", value = string.format("%s (@%s)", LP.DisplayName, LP.Name), inline = true },
+                    { name = "⏳ Session Uptime", value = uptimeStr, inline = true },
+                    { name = "🎭 Current Role", value = roleStr, inline = true },
+                    { name = "💰 Bucks", value = moneyStr, inline = true },
+                    { name = "✅ Tasks Completed", value = tostring(tasksCompletedCount) .. " solved", inline = true },
+                    { name = "🐾 Equipped Pet", value = petInfo, inline = true },
+                    { name = "🐾 Pet Tasks (To Do)", value = petTasksDisplay, inline = false },
+                    { name = "👶 Baby Tasks (To Do)", value = babyTasksDisplay, inline = false },
+                    { name = "📋 Daily Quests & Streaks", value = dailyQuestsDisplay, inline = false },
+                    { name = "🎉 Just Completed", value = justCompletedDisplay, inline = false },
+                    { name = "⚙️ Hub Status", value = currentStatus, inline = false }
+                },
+                footer = {
+                    text = "Adopt Me! Hub • Auto Tracker"
+                },
+                timestamp = DateTime.now():ToIsoDate()
+            }
+        }
+    }
+
+    local body = HttpService:JSONEncode(payload)
+    local s, res = pcall(function()
+        return fn({
+            Url = url,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = body
+        })
+    end)
+
+    local success = s and res and (res.StatusCode == 200 or res.StatusCode == 204)
+    if isTest then
+        if success then
+            notify({
+                Title = "Webhook Success",
+                Content = "Test report successfully sent to Discord!",
+                Duration = 3
+            })
+        else
+            local code = (res and res.StatusCode) or "Error"
+            notify({
+                Title = "Webhook Failed",
+                Content = "Failed to send (Status: " .. tostring(code) .. "). Check your URL.",
+                Duration = 4
+            })
+        end
+    end
+    if success then
+        lastWebhookSendTime = tick()
+    end
+    return success
+end
+
+
+local function getOption(key, default)
+    local val = getgenv()[key]
+    if val ~= nil then
+        return val
+    end
+    return default
+end
+
+local function syncCFG()
+    CFG.AutoBaby = getOption("AutoBaby", true)
+    CFG.AutoCompleteTasks = getOption("AutoCompleteTasks", true)
+    CFG.AutoSwapFullGrown = getOption("AutoSwapFullGrown", false)
+    CFG.SelectedPetKind = getOption("SelectedPetKind", "cat")
+    CFG.AutoDoQuests = false
+    CFG.AutoClaimQuests = false
+    CFG.AutoClaimTabBonus = false
+    CFG.AutoClaimDailyLogin = false
+    CFG.WebhookEnabled = getOption("WebhookEnabled", false)
+    CFG.WebhookURL = getOption("WebhookURL", "")
+    CFG.WebhookInterval = getOption("WebhookInterval", 5)
+    CFG.WebhookOnTask = getOption("WebhookOnTask", false)
+end
+
+local function equipTargetCat()
+    local targetKind = getOption("SelectedPetKind", "cat")
+    local myPets = nil
+    pcall(function()
+        setthreadidentity(2)
+        myPets = EquippedPets.get_my_equipped()
+        setthreadidentity(8)
+    end)
+    local curPet = myPets and myPets[1]
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local pets = myData.inventory and myData.inventory.pets or {}
+
+    local curKind = nil
+    if curPet then
+        local pInfo = pets[curPet.unique] or curPet
+        curKind = pInfo.kind
+    end
+
+    if curKind ~= targetKind then
+        for u, p in pairs(pets) do
+            if p.kind == targetKind then
+                swapToPet(u, p)
+                break
+            end
+        end
+    end
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "CablePerformanceFarmer"
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 2147483647
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = (gethui and gethui()) or game:GetService("CoreGui") or LP:WaitForChild("PlayerGui")
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local Back = Instance.new("Frame")
+local INNER = Instance.new("Frame")
+local UICorner = Instance.new("UICorner")
+local TextLabel = Instance.new("TextLabel")
+local UITextSizeConstraint = Instance.new("UITextSizeConstraint")
+local water = Instance.new("TextLabel")
+local UITextSizeConstraint_2 = Instance.new("UITextSizeConstraint")
+
+Back.Name = "Back"
+Back.Parent = ScreenGui
+Back.AnchorPoint = Vector2.new(0.5, 0.5)
+Back.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+Back.BorderColor3 = Color3.fromRGB(0, 0, 0)
+Back.BorderSizePixel = 0
+Back.Position = UDim2.new(0.5, 0, 0.5, 0)
+Back.Size = UDim2.new(1, 200, 1, 200)
+Back.ZIndex = 1000
+
+INNER.Name = "INNER"
+INNER.Parent = Back
+INNER.AnchorPoint = Vector2.new(0.5, 0.5)
+INNER.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+INNER.BorderColor3 = Color3.fromRGB(0, 0, 0)
+INNER.BorderSizePixel = 0
+INNER.Position = UDim2.new(0.5, 0, 0.5, 0)
+INNER.Size = UDim2.new(0.44, 0, 0.62, 0)
+INNER.ZIndex = 1001
+
+UICorner.Parent = INNER
+UICorner.CornerRadius = UDim.new(0, 12)
+
+TextLabel.Parent = INNER
+TextLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+TextLabel.BackgroundTransparency = 1.000
+TextLabel.BorderColor3 = Color3.fromRGB(0, 0, 0)
+TextLabel.BorderSizePixel = 0
+TextLabel.Position = UDim2.new(0.06, 0, 0.08, 0)
+TextLabel.Size = UDim2.new(0.88, 0, 0.80, 0)
+TextLabel.Font = Enum.Font.SourceSansBold
+TextLabel.Text = "User: " .. LP.Name .. "\nDisplay: " .. LP.DisplayName .. "\nPet: Loading...\nStatus: Monitoring Needs\nBucks: Loading...\nUptime: 0h 0m 0s"
+TextLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TextLabel.TextScaled = true
+TextLabel.TextSize = 32.000
+TextLabel.TextWrapped = true
+TextLabel.ZIndex = 1002
+
+UITextSizeConstraint.Parent = TextLabel
+UITextSizeConstraint.MaxTextSize = 32
+
+water.Name = "water"
+water.Parent = INNER
+water.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+water.BackgroundTransparency = 1.000
+water.BorderColor3 = Color3.fromRGB(0, 0, 0)
+water.BorderSizePixel = 0
+water.Position = UDim2.new(0.70, 0, 0.90, 0)
+water.Size = UDim2.new(0.26, 0, 0.08, 0)
+water.Font = Enum.Font.SourceSansBold
+water.Text = "made by cable"
+water.TextColor3 = Color3.fromRGB(255, 255, 255)
+water.TextScaled = true
+water.TextSize = 16.000
+water.TextWrapped = true
+water.TextXAlignment = Enum.TextXAlignment.Right
+water.TextYAlignment = Enum.TextYAlignment.Bottom
+water.ZIndex = 1002
+
+UITextSizeConstraint_2.Parent = water
+UITextSizeConstraint_2.MaxTextSize = 16
+
+local initialMoney = nil
+local sessionStartTime = tick()
+
+local function formatNumber(n)
+    if not n then return "0" end
+    local formatted = tostring(math.floor(n))
+    local k
+    while true do
+        formatted, k = string.gsub(formatted, "^(-?%d+)(%d%d%d)", "%1,%2")
+        if k == 0 then break end
+    end
+    return formatted
+end
+
+local function formatUptime(seconds)
+    seconds = math.max(0, math.floor(seconds))
+    local h = math.floor(seconds / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    local s = seconds % 60
+    return string.format("%dh %dm %ds", h, m, s)
+end
+
+updateStatsUI = function()
+    pcall(function()
+        local currentMoney = 0
+        pcall(function()
+            local myData = ClientData.get_data()[LP.Name] or {}
+            currentMoney = myData.money or ClientData.get("money") or 0
+        end)
+        if initialMoney == nil then
+            initialMoney = currentMoney
+        end
+        local earned = math.max(0, currentMoney - initialMoney)
+        local uptimeStr = formatUptime(tick() - sessionStartTime)
+        local userStr = LP.Name
+        local displayStr = LP.DisplayName
+        local petStr = getEquippedPetInfo()
+
+        TextLabel.Text = string.format(
+            "User: %s\nDisplay: %s\nPet: %s\nStatus: %s\nBucks: %s (+%s)\nUptime: %s",
+            userStr,
+            displayStr,
+            petStr,
+            currentActivity,
+            formatNumber(currentMoney),
+            formatNumber(earned),
+            uptimeStr
+        )
+    end)
+end
+
+local farmerActive = true
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+if getOption("Disable3DRendering", true) then
+    pcall(function()
+        RunService:Set3dRenderingEnabled(false)
+    end)
+end
+
+local renderingState = not getOption("Disable3DRendering", true)
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if not gpe and (input.KeyCode == Enum.KeyCode.RightControl or input.KeyCode == Enum.KeyCode.P) then
+        renderingState = not renderingState
+        pcall(function()
+            RunService:Set3dRenderingEnabled(renderingState)
+        end)
+        Back.Visible = not renderingState
+    end
+end)
+
+getgenv().PerformanceFarmerCleanup = function()
+    farmerActive = false
+    pcall(function()
+        RunService:Set3dRenderingEnabled(true)
+    end)
+    pcall(function()
+        ScreenGui:Destroy()
+    end)
+end
+
+local function updateDashboardDisplay()
+    updateStatsUI()
+end
+
+local function updateQuestsDisplay()
+    updateStatsUI()
+end
+
+task.spawn(function()
+    while farmerActive do
+        updateStatsUI()
+        task.wait(1)
+    end
+end)
+
+task.spawn(function()
+    while farmerActive do
+        task.wait(2)
+        syncCFG()
+        if CFG.AutoBaby then
+            if getCurrentTeam() ~= "Babies" then
+                ensureBaby()
+            end
+        end
+        equipTargetCat()
+        if CFG.AutoCompleteTasks then
+            pcall(solveCurrentTasks)
+        end
+        if CFG.WebhookEnabled and CFG.WebhookURL and CFG.WebhookURL ~= "" then
+            local intervalSec = (tonumber(CFG.WebhookInterval) or 5) * 60
+            if tick() - lastWebhookSendTime >= intervalSec then
+                pcall(function()
+                    sendWebhookReport(false)
+                end)
+            end
+        end
+        pcall(resetCameraZoom)
+    end
+end)
+
+if CFG.AutoBaby then
+    ensureBaby()
+end
+equipTargetCat()
+task.spawn(function()
+    solveCurrentTasks()
+end)
