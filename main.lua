@@ -2105,33 +2105,33 @@ Back.ZIndex = 1000
 INNER.Name = "INNER"
 INNER.Parent = Back
 INNER.AnchorPoint = Vector2.new(0.5, 0.5)
-INNER.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+INNER.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
 INNER.BorderColor3 = Color3.fromRGB(0, 0, 0)
 INNER.BorderSizePixel = 0
 INNER.Position = UDim2.new(0.5, 0, 0.5, 0)
-INNER.Size = UDim2.new(0.44, 0, 0.62, 0)
+INNER.Size = UDim2.new(0.50, 0, 0.68, 0)
 INNER.ZIndex = 1001
 
 UICorner.Parent = INNER
-UICorner.CornerRadius = UDim.new(0, 12)
+UICorner.CornerRadius = UDim.new(0, 14)
 
 TextLabel.Parent = INNER
 TextLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 TextLabel.BackgroundTransparency = 1.000
 TextLabel.BorderColor3 = Color3.fromRGB(0, 0, 0)
 TextLabel.BorderSizePixel = 0
-TextLabel.Position = UDim2.new(0.06, 0, 0.08, 0)
-TextLabel.Size = UDim2.new(0.88, 0, 0.80, 0)
+TextLabel.Position = UDim2.new(0.06, 0, 0.05, 0)
+TextLabel.Size = UDim2.new(0.88, 0, 0.83, 0)
 TextLabel.Font = Enum.Font.SourceSansBold
-TextLabel.Text = "User: " .. LP.Name .. "\nDisplay: " .. LP.DisplayName .. "\nPet: Loading...\nStatus: Monitoring Needs\nBucks: Loading...\nUptime: 0h 0m 0s"
+TextLabel.Text = "User: " .. LP.DisplayName .. " (@" .. LP.Name .. ")\nPet: Loading...\nStatus: Monitoring Needs\nBucks: Loading...\nTasks: 0 solved\nWebhook: Checking...\nUptime: 0h 0m 0s"
 TextLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 TextLabel.TextScaled = true
-TextLabel.TextSize = 32.000
+TextLabel.TextSize = 28.000
 TextLabel.TextWrapped = true
 TextLabel.ZIndex = 1002
 
 UITextSizeConstraint.Parent = TextLabel
-UITextSizeConstraint.MaxTextSize = 32
+UITextSizeConstraint.MaxTextSize = 28
 
 water.Name = "water"
 water.Parent = INNER
@@ -2139,23 +2139,20 @@ water.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 water.BackgroundTransparency = 1.000
 water.BorderColor3 = Color3.fromRGB(0, 0, 0)
 water.BorderSizePixel = 0
-water.Position = UDim2.new(0.70, 0, 0.90, 0)
-water.Size = UDim2.new(0.26, 0, 0.08, 0)
-water.Font = Enum.Font.SourceSansBold
-water.Text = "made by cable"
-water.TextColor3 = Color3.fromRGB(255, 255, 255)
+water.Position = UDim2.new(0.05, 0, 0.89, 0)
+water.Size = UDim2.new(0.90, 0, 0.08, 0)
+water.Font = Enum.Font.SourceSans
+water.Text = "made by cable   •   [RCtrl / P] Toggle Screen"
+water.TextColor3 = Color3.fromRGB(180, 180, 180)
 water.TextScaled = true
-water.TextSize = 16.000
+water.TextSize = 15.000
 water.TextWrapped = true
-water.TextXAlignment = Enum.TextXAlignment.Right
-water.TextYAlignment = Enum.TextYAlignment.Bottom
+water.TextXAlignment = Enum.TextXAlignment.Center
+water.TextYAlignment = Enum.TextYAlignment.Center
 water.ZIndex = 1002
 
 UITextSizeConstraint_2.Parent = water
-UITextSizeConstraint_2.MaxTextSize = 16
-
-local initialMoney = nil
-local sessionStartTime = tick()
+UITextSizeConstraint_2.MaxTextSize = 15
 
 local function formatNumber(n)
     if not n then return "0" end
@@ -2176,6 +2173,20 @@ local function formatUptime(seconds)
     return string.format("%dh %dm %ds", h, m, s)
 end
 
+local function formatCountdown(seconds)
+    seconds = math.max(0, math.floor(seconds))
+    local h = math.floor(seconds / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    local s = seconds % 60
+    if h > 0 then
+        return string.format("%dh %dm %ds", h, m, s)
+    elseif m > 0 then
+        return string.format("%dm %ds", m, s)
+    else
+        return string.format("%ds", s)
+    end
+end
+
 updateStatsUI = function()
     pcall(function()
         local currentMoney = 0
@@ -2187,19 +2198,34 @@ updateStatsUI = function()
             initialMoney = currentMoney
         end
         local earned = math.max(0, currentMoney - initialMoney)
-        local uptimeStr = formatUptime(tick() - sessionStartTime)
-        local userStr = LP.Name
-        local displayStr = LP.DisplayName
+        local elapsedSec = tick() - sessionStartTime
+        local bucksPerHour = (elapsedSec > 10) and math.floor((earned / elapsedSec) * 3600) or 0
+        local uptimeStr = formatUptime(elapsedSec)
         local petStr = getEquippedPetInfo()
 
+        local webhookStatus = "Disabled"
+        if CFG.WebhookEnabled and CFG.WebhookURL and CFG.WebhookURL ~= "" then
+            local intervalSec = (tonumber(CFG.WebhookInterval) or 5) * 60
+            if lastWebhookSendTime == 0 then
+                webhookStatus = "Active (Pending first ping)"
+            else
+                local remaining = math.max(0, math.floor(intervalSec - (tick() - lastWebhookSendTime)))
+                webhookStatus = string.format("Active (Next in %s)", formatCountdown(remaining))
+            end
+        end
+
+        local bucksStr = string.format("%s (+%s | %s/hr)", formatNumber(currentMoney), formatNumber(earned), formatNumber(bucksPerHour))
+        local tasksStr = string.format("%s solved", formatNumber(tasksCompletedCount or 0))
+
         TextLabel.Text = string.format(
-            "User: %s\nDisplay: %s\nPet: %s\nStatus: %s\nBucks: %s (+%s)\nUptime: %s",
-            userStr,
-            displayStr,
+            "User: %s (@%s)\nPet: %s\nStatus: %s\nBucks: %s\nTasks: %s\nWebhook: %s\nUptime: %s",
+            LP.DisplayName,
+            LP.Name,
             petStr,
             currentActivity,
-            formatNumber(currentMoney),
-            formatNumber(earned),
+            bucksStr,
+            tasksStr,
+            webhookStatus,
             uptimeStr
         )
     end)
