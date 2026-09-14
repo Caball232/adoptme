@@ -6,11 +6,14 @@ if getgenv().AutoBaby == nil then getgenv().AutoBaby = true end
 if getgenv().AutoCompleteTasks == nil then getgenv().AutoCompleteTasks = true end
 if getgenv().AutoSwapFullGrown == nil then getgenv().AutoSwapFullGrown = false end
 if getgenv().SelectedPetKind == nil then getgenv().SelectedPetKind = "cat" end
+if getgenv().FPSCap == nil then getgenv().FPSCap = 15 end
+if getgenv().UltraLowGFX == nil then getgenv().UltraLowGFX = true end
+if getgenv().MuteAudio == nil then getgenv().MuteAudio = true end
+if getgenv().Disable3DRendering == nil then getgenv().Disable3DRendering = true end
 if getgenv().WebhookEnabled == nil then getgenv().WebhookEnabled = false end
 if getgenv().WebhookURL == nil then getgenv().WebhookURL = "" end
 if getgenv().WebhookInterval == nil then getgenv().WebhookInterval = 5 end
 if getgenv().WebhookOnTask == nil then getgenv().WebhookOnTask = false end
-if getgenv().Disable3DRendering == nil then getgenv().Disable3DRendering = true end
 
 local function elevate()
     if setthreadidentity then
@@ -99,6 +102,7 @@ end
 
 
 
+local farmerActive = true
 local currentActivity = "Monitoring Needs"
 local updateStatsUI
 local function setActivity(act)
@@ -115,7 +119,8 @@ local lp = LP
 
 pcall(function()
     for _, v in pairs(getconnections(lp.Idled)) do
-        v:Disable()
+        pcall(function() v:Disable() end)
+        pcall(function() v:Disconnect() end)
     end
 end)
 
@@ -247,8 +252,8 @@ pcall(function()
 end)
 
 task.spawn(function()
-    while true do
-        task.wait(0.5)
+    while farmerActive do
+        task.wait(3)
         pcall(function()
             LP.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Zoom
             if LP.CameraMaxZoomDistance < 15 then
@@ -1993,6 +1998,84 @@ local function equipTargetCat()
     end
 end
 
+local function applyPerformanceOptimizations()
+    pcall(function()
+        local cap = tonumber(getOption("FPSCap", 15)) or 15
+        if setfpscap and cap > 0 then
+            setfpscap(cap)
+        end
+    end)
+
+    if getOption("UltraLowGFX", true) then
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+            settings().Rendering.EditQualityLevel = Enum.QualityLevel.Level01
+            settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.DefaultAuto
+        end)
+
+        pcall(function()
+            local lighting = game:GetService("Lighting")
+            lighting.GlobalShadows = false
+            lighting.FogEnd = 9e9
+            lighting.Brightness = 0
+            for _, v in ipairs(lighting:GetChildren()) do
+                if v:IsA("PostEffect") or v:IsA("Atmosphere") or v:IsA("Sky") or v:IsA("BloomEffect") or v:IsA("BlurEffect") or v:IsA("ColorCorrectionEffect") or v:IsA("SunRaysEffect") then
+                    pcall(function() v.Enabled = false end)
+                end
+            end
+        end)
+
+        pcall(function()
+            local terrain = workspace:FindFirstChildOfClass("Terrain")
+            if terrain then
+                terrain.WaterWaveSize = 0
+                terrain.WaterWaveSpeed = 0
+                terrain.WaterReflectance = 0
+                terrain.WaterTransparency = 0
+            end
+        end)
+
+        pcall(function()
+            local function stripObject(v)
+                if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Beam") or v:IsA("Fire") or v:IsA("Smoke") or v:IsA("Sparkles") then
+                    pcall(function() v.Enabled = false end)
+                elseif v:IsA("PointLight") or v:IsA("SpotLight") or v:IsA("SurfaceLight") then
+                    pcall(function() v.Enabled = false end)
+                end
+            end
+
+            for _, v in ipairs(workspace:GetDescendants()) do
+                stripObject(v)
+            end
+
+            workspace.DescendantAdded:Connect(function(v)
+                if getOption("UltraLowGFX", true) then
+                    stripObject(v)
+                end
+            end)
+        end)
+    end
+
+    if getOption("MuteAudio", true) then
+        pcall(function()
+            local SoundService = game:GetService("SoundService")
+            SoundService.RespectFilteringEnabled = true
+            for _, s in ipairs(workspace:GetDescendants()) do
+                if s:IsA("Sound") then
+                    pcall(function() s.Volume = 0 end)
+                end
+            end
+            workspace.DescendantAdded:Connect(function(s)
+                if getOption("MuteAudio", true) and s:IsA("Sound") then
+                    pcall(function() s.Volume = 0 end)
+                end
+            end)
+        end)
+    end
+end
+
+applyPerformanceOptimizations()
+
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "CablePerformanceFarmer"
 ScreenGui.IgnoreGuiInset = true
@@ -2122,7 +2205,6 @@ updateStatsUI = function()
     end)
 end
 
-local farmerActive = true
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
@@ -2138,6 +2220,13 @@ UserInputService.InputBegan:Connect(function(input, gpe)
         renderingState = not renderingState
         pcall(function()
             RunService:Set3dRenderingEnabled(renderingState)
+            if setfpscap then
+                if renderingState then
+                    setfpscap(60)
+                else
+                    setfpscap(tonumber(getOption("FPSCap", 15)) or 15)
+                end
+            end
         end)
         Back.Visible = not renderingState
     end
@@ -2147,6 +2236,11 @@ getgenv().PerformanceFarmerCleanup = function()
     farmerActive = false
     pcall(function()
         RunService:Set3dRenderingEnabled(true)
+    end)
+    pcall(function()
+        if setfpscap then
+            setfpscap(60)
+        end
     end)
     pcall(function()
         ScreenGui:Destroy()
@@ -2165,6 +2259,17 @@ task.spawn(function()
     while farmerActive do
         updateStatsUI()
         task.wait(1)
+    end
+end)
+
+task.spawn(function()
+    while farmerActive do
+        task.wait(60)
+        pcall(function()
+            if collectgarbage then
+                collectgarbage("collect")
+            end
+        end)
     end
 end)
 
