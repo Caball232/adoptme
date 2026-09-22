@@ -14,6 +14,10 @@ if getgenv().WebhookEnabled == nil then getgenv().WebhookEnabled = false end
 if getgenv().WebhookURL == nil then getgenv().WebhookURL = "" end
 if getgenv().WebhookInterval == nil then getgenv().WebhookInterval = 5 end
 if getgenv().WebhookOnTask == nil then getgenv().WebhookOnTask = false end
+if getgenv().BridgeEnabled == nil then getgenv().BridgeEnabled = true end
+if getgenv().BridgeURL == nil then getgenv().BridgeURL = "http://localhost:3000" end
+if getgenv().BridgeAPIKey == nil then getgenv().BridgeAPIKey = "epsteinfarmer" end
+if getgenv().BridgeInterval == nil then getgenv().BridgeInterval = 5 end
 
 local function elevate()
     if setthreadidentity then
@@ -164,10 +168,16 @@ local CFG = {
     WebhookEnabled = false,
     WebhookURL = "",
     WebhookInterval = 5,
-    WebhookOnTask = false
+    WebhookOnTask = false,
+    BridgeEnabled = true,
+    BridgeURL = "http://localhost:3000",
+    BridgeAPIKey = "change_this_secret_key_123",
+    BridgeInterval = 5
 }
 
 local lastWebhookSendTime = 0
+local lastBridgeSendTime = 0
+local bridgeConnected = false
 
 local taskDisplayNames = {
     sleepy = "Sleepy (Needs Bed or Crib)",
@@ -1768,6 +1778,14 @@ local function solveCurrentTasks()
         end)
     end
 
+    if CFG.BridgeEnabled and tasksCompletedCount > prevCompletedCount then
+        task.spawn(function()
+            pcall(function()
+                sendBridgeHeartbeat("Task Solved", "Solved: " .. (recentCompletedSummary or "Need"), nil)
+            end)
+        end)
+    end
+
     isSolvingTasks = false
     setActivity("Monitoring Needs")
 end
@@ -1947,6 +1965,145 @@ local function sendWebhookReport(isTest)
 end
 
 
+local function sendChatMessage(message)
+    local TextChatService = game:GetService("TextChatService")
+    if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+        local textChannels = TextChatService:FindFirstChild("TextChannels")
+        if textChannels then
+            local rbxGeneral = textChannels:FindFirstChild("RBXGeneral")
+            if rbxGeneral then
+                rbxGeneral:SendAsync(message)
+                return
+            end
+        end
+    end
+    local chatEvents = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
+    if chatEvents then
+        local sayMsg = chatEvents:FindFirstChild("SayMessageRequest")
+        if sayMsg then
+            sayMsg:FireServer(message, "All")
+            return
+        end
+    end
+end
+
+local function executeBridgeCommand(cmd)
+    if not cmd or not cmd.action then return end
+    print(string.format("[DISCORD COMMAND] Received: %s", tostring(cmd.action)))
+
+    if cmd.action == "rejoin" then
+        game:GetService("TeleportService"):Teleport(game.PlaceId, LP)
+    elseif cmd.action == "say" and cmd.payload then
+        sendChatMessage(tostring(cmd.payload))
+    elseif cmd.action == "exec" and cmd.payload then
+        local fn, err = loadstring(tostring(cmd.payload))
+        if fn then
+            task.spawn(fn)
+        else
+            warn("[DISCORD COMMAND] Exec error:", err)
+        end
+    elseif cmd.action == "baby" or cmd.action == "autobaby" then
+        CFG.AutoBaby = not CFG.AutoBaby
+        getgenv().AutoBaby = CFG.AutoBaby
+        print("[DISCORD COMMAND] AutoBaby toggled to:", CFG.AutoBaby)
+    elseif cmd.action == "tasks" or cmd.action == "autotasks" then
+        CFG.AutoCompleteTasks = not CFG.AutoCompleteTasks
+        getgenv().AutoCompleteTasks = CFG.AutoCompleteTasks
+        print("[DISCORD COMMAND] AutoCompleteTasks toggled to:", CFG.AutoCompleteTasks)
+    end
+end
+
+local function sendBridgeHeartbeat(statusText, messageText, extraData)
+    if not CFG.BridgeEnabled or not CFG.BridgeURL or CFG.BridgeURL == "" then
+        return false
+    end
+
+    local HttpService = game:GetService("HttpService")
+    local fn = (syn and syn.request) or request or http_request
+    if not fn then
+        return false
+    end
+
+    local elapsed = math.floor(tick() - sessionStartTime)
+    local hours = math.floor(elapsed / 3600)
+    local mins = math.floor((elapsed % 3600) / 60)
+    local secs = elapsed % 60
+    local uptimeStr = string.format("%02dh %02dm %02ds", hours, mins, secs)
+
+    local myData = ClientData.get_data()[LP.Name] or {}
+    local currentMoney = myData.money or 0
+    if initialMoney == nil then initialMoney = currentMoney end
+    local moneyEarned = currentMoney - initialMoney
+    local earnedSign = (moneyEarned >= 0) and ("+" .. formatMoney(moneyEarned)) or ("-" .. formatMoney(math.abs(moneyEarned)))
+    local moneyStr = formatMoney(currentMoney) .. " (" .. earnedSign .. ")"
+
+    local petInfo = getEquippedPetInfo()
+    local teamStr = getCurrentTeam()
+    local petTasks = getPetAilmentKeys()
+
+    local telemetryData = extraData or {
+        ["💰 Bucks"] = moneyStr,
+        ["✅ Tasks Solved"] = tostring(tasksCompletedCount),
+        ["🐾 Equipped Pet"] = petInfo,
+        ["👶 Role"] = teamStr,
+        ["⏳ Active Pet Needs"] = (#petTasks > 0) and table.concat(petTasks, ", ") or "None",
+        ["⏱️ Uptime"] = uptimeStr
+    }
+
+    local currentStatus = "Idle"
+    if isSolvingTasks then
+        currentStatus = "Solving needs..."
+    elseif CFG.AutoCompleteTasks then
+        currentStatus = "Monitoring for needs..."
+    end
+
+    local payload = {
+        username = LP.Name,
+        userId = LP.UserId,
+        placeId = game.PlaceId,
+        jobId = game.JobId,
+        status = statusText or currentStatus,
+        message = messageText,
+        data = telemetryData
+    }
+
+    local s, res = pcall(function()
+        return fn({
+            Url = CFG.BridgeURL .. "/api/heartbeat",
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json",
+                ["Authorization"] = "Bearer " .. (CFG.BridgeAPIKey or "")
+            },
+            Body = HttpService:JSONEncode(payload)
+        })
+    end)
+
+    if s and res and res.StatusCode == 200 then
+        bridgeConnected = true
+        lastBridgeSendTime = tick()
+        local decOk, body = pcall(function()
+            return HttpService:JSONDecode(res.Body)
+        end)
+        if decOk and body and body.command then
+            executeBridgeCommand(body.command)
+        end
+        return true
+    else
+        bridgeConnected = false
+        return false
+    end
+end
+
+getgenv().DiscordLog = function(status, msg, data)
+    task.spawn(function()
+        pcall(function()
+            sendBridgeHeartbeat(status, msg, data)
+        end)
+    end)
+end
+
+
 local function getOption(key, default)
     local val = getgenv()[key]
     if val ~= nil then
@@ -1968,6 +2125,10 @@ local function syncCFG()
     CFG.WebhookURL = getOption("WebhookURL", "")
     CFG.WebhookInterval = getOption("WebhookInterval", 5)
     CFG.WebhookOnTask = getOption("WebhookOnTask", false)
+    CFG.BridgeEnabled = getOption("BridgeEnabled", true)
+    CFG.BridgeURL = getOption("BridgeURL", "http://localhost:3000")
+    CFG.BridgeAPIKey = getOption("BridgeAPIKey", "change_this_secret_key_123")
+    CFG.BridgeInterval = getOption("BridgeInterval", 5)
 end
 
 local function equipTargetCat()
@@ -2214,18 +2375,23 @@ updateStatsUI = function()
             end
         end
 
+        local bridgeStatus = "Disabled"
+        if CFG.BridgeEnabled then
+            bridgeStatus = bridgeConnected and "🟢 Connected" or "🟡 Connecting..."
+        end
+
         local bucksStr = string.format("%s (+%s | %s/hr)", formatNumber(currentMoney), formatNumber(earned), formatNumber(bucksPerHour))
         local tasksStr = string.format("%s solved", formatNumber(tasksCompletedCount or 0))
 
         TextLabel.Text = string.format(
-            "User: %s (@%s)\nPet: %s\nStatus: %s\nBucks: %s\nTasks: %s\nWebhook: %s\nUptime: %s",
+            "User: %s (@%s)\nPet: %s\nStatus: %s\nBucks: %s\nTasks: %s\nDiscord Bridge: %s\nUptime: %s",
             LP.DisplayName,
             LP.Name,
             petStr,
             currentActivity,
             bucksStr,
             tasksStr,
-            webhookStatus,
+            bridgeStatus,
             uptimeStr
         )
     end)
@@ -2320,6 +2486,14 @@ task.spawn(function()
                 end)
             end
         end
+        if CFG.BridgeEnabled and CFG.BridgeURL and CFG.BridgeURL ~= "" then
+            local bridgeIntervalSec = tonumber(CFG.BridgeInterval) or 5
+            if tick() - lastBridgeSendTime >= bridgeIntervalSec then
+                pcall(function()
+                    sendBridgeHeartbeat(nil, nil, nil)
+                end)
+            end
+        end
         pcall(resetCameraZoom)
     end
 end)
@@ -2328,6 +2502,15 @@ if CFG.AutoBaby then
     ensureBaby()
 end
 equipTargetCat()
+
+-- Initial Discord Bridge handshake (triggers channel creation on Discord immediately)
+if CFG.BridgeEnabled then
+    task.spawn(function()
+        task.wait(1)
+        sendBridgeHeartbeat("Ready", "Adopt Me! Farmer connected and active.", nil)
+    end)
+end
+
 task.spawn(function()
     solveCurrentTasks()
 end)
