@@ -84,6 +84,9 @@ end
 local hubActive = true
 getgenv().AdoptMeHubCleanup = function()
     hubActive = false
+    if getgenv().DiscordDisconnect then
+        pcall(function() getgenv().DiscordDisconnect("Script unloaded / stopped") end)
+    end
     pcall(function()
         if getgenv().AdoptMeHub and getgenv().AdoptMeHub.Root and getgenv().AdoptMeHub.Root.Parent then
             getgenv().AdoptMeHub.Root.Parent:Destroy()
@@ -171,7 +174,7 @@ local CFG = {
     WebhookOnTask = false,
     BridgeEnabled = true,
     BridgeURL = "http://localhost:3000",
-    BridgeAPIKey = "change_this_secret_key_123",
+    BridgeAPIKey = "epsteinfarmer",
     BridgeInterval = 5
 }
 
@@ -2095,6 +2098,38 @@ local function sendBridgeHeartbeat(statusText, messageText, extraData)
     end
 end
 
+local function sendBridgeDisconnect(reason)
+    if not CFG.BridgeEnabled or not CFG.BridgeURL or CFG.BridgeURL == "" then
+        return false
+    end
+    local HttpService = game:GetService("HttpService")
+    local fn = (syn and syn.request) or request or http_request
+    if not fn then return false end
+    pcall(function()
+        return fn({
+            Url = CFG.BridgeURL .. "/api/disconnect",
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json",
+                ["Authorization"] = "Bearer " .. (CFG.BridgeAPIKey or "")
+            },
+            Body = HttpService:JSONEncode({
+                username = LP.Name,
+                reason = reason or "Script stopped or player left"
+            })
+        })
+    end)
+    bridgeConnected = false
+end
+
+getgenv().DiscordDisconnect = sendBridgeDisconnect
+
+pcall(function()
+    game:BindToClose(function()
+        sendBridgeDisconnect("Game closing")
+    end)
+end)
+
 getgenv().DiscordLog = function(status, msg, data)
     task.spawn(function()
         pcall(function()
@@ -2426,6 +2461,9 @@ end)
 
 getgenv().PerformanceFarmerCleanup = function()
     farmerActive = false
+    if getgenv().DiscordDisconnect then
+        pcall(function() getgenv().DiscordDisconnect("Script unloaded / stopped") end)
+    end
     pcall(function()
         RunService:Set3dRenderingEnabled(true)
     end)
